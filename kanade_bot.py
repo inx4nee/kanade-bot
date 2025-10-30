@@ -1,22 +1,32 @@
 import discord
 from discord.ext import commands
+import google.generativeai as genai
 import asyncio
 import os
 from flask import Flask
 from threading import Thread
-import random
 
-print("1. Script started")  # ← ADD THIS
+# ==================== GEMINI AI SETUP ====================
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
+# ==================== DISCORD BOT ====================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-print("2. Bot object created")  # ← ADD THIS
+# ==================== KANADE PERSONALITY ====================
+KANADE_PROMPT = """
+You are Kanade Tachibana from Angel Beats! – calm, warm, gentle, natural.
+Speak in short, heartfelt sentences. End-of-story version.
+
+User: {user_message}
+
+Your response:
+"""
 
 @bot.event
 async def on_ready():
-    print("3. BOT IS ONLINE – ORDER RESTORED!")  # ← CHANGE THIS
+    print(f'{bot.user} online – order restored.')
     activity = discord.Activity(type=discord.ActivityType.playing, name="help/@inxainee")
     await bot.change_presence(activity=activity)
 
@@ -28,43 +38,39 @@ async def on_message(message):
         try:
             user_msg = message.content.replace(f'<@{bot.user.id}>', '').strip() or "Hey"
             async with message.channel.typing():
-                resp = await generate_response(user_msg)
-            await message.reply(resp)
+                response = await generate_response(user_msg)
+            await message.reply(response)
         except Exception as e:
-            print(f"Message error: {e}")
+            print(f"Error: {e}")
             await message.reply("Understood.")
     await bot.process_commands(message)
 
+# ==================== GEMINI RESPONSE ====================
 async def generate_response(user_message):
-    print(f"Generating response for: {user_message}")  # ← DEBUG
-    kanade_lines = [
-        "Hey... I'm here.",
-        "Understood.",
-        "What is it?",
-        "Order restored.",
-        "I'm listening...",
-        "Yes?"
-    ]
-    return random.choice(kanade_lines)
+    loop = asyncio.get_event_loop()
+    prompt = KANADE_PROMPT.format(user_message=user_message)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        result = await loop.run_in_executor(
+            None, lambda: model.generate_content(prompt)
+        )
+        return result.text.strip() if result.text else "Understood."
+    except Exception as e:
+        print(f"Gemini error: {e}")
+        return "Understood."
 
-# Flask
+# ==================== FLASK (RENDER KEEP-ALIVE) ====================
 app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "Kanade online."
+    return "Kanade online – order maintained."
 
 def run_flask():
     port = int(os.environ.get('PORT', 8080))
-    print(f"4. Flask starting on port {port}")  # ← DEBUG
     app.run(host='0.0.0.0', port=port)
 
-print("5. Starting Flask thread")  # ← DEBUG
 Thread(target=run_flask, daemon=True).start()
 
-print("6. Starting Discord bot...")  # ← DEBUG
-BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-if not BOT_TOKEN:
-    print("ERROR: DISCORD_BOT_TOKEN missing!")
-else:
-    print("7. Token found, running bot...")
-    bot.run(BOT_TOKEN)
+# ==================== RUN BOT ====================
+bot.run(os.getenv('DISCORD_BOT_TOKEN'))
