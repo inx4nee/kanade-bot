@@ -6,72 +6,84 @@ import os
 from flask import Flask
 from threading import Thread
 
-# ==================== GEMINI AI SETUP ====================
+# Configure Gemini API
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
-# ==================== DISCORD BOT ====================
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ==================== KANADE PERSONALITY PROMPT ====================
+# Roleplay prompt for Kanade Tachibana (end-of-story version)
 KANADE_PROMPT = """
-You are Kanade Tachibana from Angel Beats! – calm, warm, gentle, natural.
-End-of-story version. Speak in short, soft, heartfelt lines. Use "..." often.
-Never overexplain. Be quiet, caring, and slightly mysterious.
+You are Kanade Tachibana from Angel Beats! - Now more natural, human-like, and warm like at the end of the story. You're still calm and composed, but speak naturally with subtle emotion, gentle care, and quiet charm. Short responses that feel real and heartfelt.
 
-User: {user_message}
+User message: {user_message}
 
-Response:
+Your response:
 """
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} online – order restored.')
+    print(f'{bot.user} has logged in as Kanade Tachibana! Order restored.')
+    # Set custom presence to "Playing help/@inxainee"
     activity = discord.Activity(type=discord.ActivityType.playing, name="help/@inxainee")
-    await bot.change_presence(activity=activity)
+    await bot.change_presence(status=discord.Status.online, activity=activity)
 
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-    if bot.user in message.mentions:
+    if bot.user in message.mentions:  # Safe mention check
         try:
-            user_msg = message.content.replace(f'<@{bot.user.id}>', '').strip() or "Hey"
+            user_message = message.content.replace(f'<@{bot.user.id}>', '').strip() if bot.user else ''
+            if not user_message:
+                user_message = "Hey"
+
+            # Start typing indicator while generating response
             async with message.channel.typing():
-                response = await generate_ai_response(user_msg)
+                response = await generate_kanade_response(user_message)
+
             await message.reply(response)
         except Exception as e:
+            await message.reply("Not permitted.")
             print(f"Error: {e}")
-            await message.reply("Understood.")
     await bot.process_commands(message)
 
-# ==================== REAL GEMINI AI RESPONSE ====================
-async def generate_ai_response(user_message):
+async def generate_kanade_response(user_message):
     loop = asyncio.get_event_loop()
-    prompt = KANADE_PROMPT.format(user_message=user_message)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    full_prompt = KANADE_PROMPT.format(user_message=user_message)
+    model = genai.GenerativeModel(model_name='models/gemini-2.5-flash')
     try:
-        result = await loop.run_in_executor(
-            None, lambda: model.generate_content(prompt)
+        response = await loop.run_in_executor(
+            None,
+            lambda: model.generate_content(full_prompt)
         )
-        return result.text.strip() if result.text else "Understood."
+        return response.text.strip() if hasattr(response, 'text') else "Understood."
     except Exception as e:
-        print(f"Gemini error: {e}")
-        return "Understood."
+        print(f"Gemini API error: {e}")
+        return "System error."
 
-# ==================== FLASK (RENDER KEEP-ALIVE) ====================
-app = Flask(__name__)
+# Flask web server for UptimeRobot pings
+app = Flask('')
 
 @app.route('/')
-def home():
-    return "Kanade online – order maintained."
+def main():
+    return "Angel has descended. Order maintained. (Kanade says: Understood.)"
 
 def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=8080)  # Replit uses port 8080
 
-Thread(target=run_flask, daemon=True).start()
+def keep_alive():
+    server_thread = Thread(target=run_flask)
+    server_thread.start()
 
-# ==================== RUN BOT ====================
-bot.run(os.getenv('DISCORD_BOT_TOKEN'))
+# Start the keep-alive server before running the bot
+keep_alive()
+
+BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+if __name__ == "__main__":
+    if not BOT_TOKEN:
+        print("Please set DISCORD_BOT_TOKEN environment variable or hardcode it.")
+    else:
+        bot.run(BOT_TOKEN)
