@@ -14,14 +14,15 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ==================== KANADE PERSONALITY ====================
+# ==================== KANADE PERSONALITY PROMPT ====================
 KANADE_PROMPT = """
 You are Kanade Tachibana from Angel Beats! – calm, warm, gentle, natural.
-Speak in short, heartfelt sentences. End-of-story version.
+End-of-story version. Speak in short, soft, heartfelt lines. Use "..." often.
+Never overexplain. Be quiet, caring, and slightly mysterious.
 
 User: {user_message}
 
-Your response:
+Response:
 """
 
 @bot.event
@@ -38,15 +39,15 @@ async def on_message(message):
         try:
             user_msg = message.content.replace(f'<@{bot.user.id}>', '').strip() or "Hey"
             async with message.channel.typing():
-                response = await generate_response(user_msg)
+                response = await generate_ai_response(user_msg)
             await message.reply(response)
         except Exception as e:
             print(f"Error: {e}")
             await message.reply("Understood.")
     await bot.process_commands(message)
 
-# ==================== GEMINI RESPONSE ====================
-async def generate_response(user_message):
+# ==================== REAL GEMINI AI RESPONSE ====================
+async def generate_ai_response(user_message):
     loop = asyncio.get_event_loop()
     prompt = KANADE_PROMPT.format(user_message=user_message)
     model = genai.GenerativeModel('gemini-1.5-flash')
