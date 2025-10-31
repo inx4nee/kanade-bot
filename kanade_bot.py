@@ -4,7 +4,6 @@ import google.generativeai as genai
 import asyncio
 import os
 import time
-import io
 from typing import List
 
 # === CONFIG ===
@@ -52,7 +51,12 @@ async def auto_cleanup():
 # === ON MESSAGE ===
 @bot.event
 async def on_message(message):
+    # Ignore bot and non-mention
     if message.author == bot.user or bot.user not in message.mentions:
+        return await bot.process_commands(message)
+
+    # Prevent double processing
+    if hasattr(message, 'processed') and message.processed:
         return
 
     user_msg = message.content.replace(f'<@{bot.user.id}>', '').strip() or "Hello"
@@ -60,10 +64,19 @@ async def on_message(message):
     user_last_seen[uid] = time.time()
     user_message_count[uid] = user_message_count.get(uid, 0) + 1
 
+    # Mark as processed to avoid command double-trigger
+    message.processed = True
+
     async with message.channel.typing():
         reply = await generate_response(uid, user_msg, message.attachments)
+
     await message.reply(reply)
-    await bot.process_commands(message)
+
+    # Only process commands if not already handled
+    try:
+        await bot.process_commands(message)
+    except:
+        pass
 
 # === /help ===
 @bot.tree.command(name="help", description="Kanade Help")
@@ -94,7 +107,7 @@ async def stats(interaction: discord.Interaction):
     embed.set_footer(text="Model: gemini-2.5-flash | Auto-delete: 30 days")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# === /tophelped (PUBLIC LEADERBOARD) ===
+# === /tophelped (PUBLIC) ===
 @bot.tree.command(name="tophelped", description="Top 10 most helped by Kanade")
 async def tophelped(interaction: discord.Interaction):
     if not user_message_count:
@@ -122,7 +135,7 @@ async def reset(interaction: discord.Interaction, member: discord.Member = None)
     else:
         await interaction.response.send_message("No memory found.", ephemeral=True)
 
-# === GENERATE RESPONSE (WITH IMAGE ANALYSIS) ===
+# === GENERATE RESPONSE (FIXED: NO DUPLICATES, IMAGE WORKS) ===
 async def generate_response(uid: int, msg: str, attachments: List[discord.Attachment]) -> str:
     loop = asyncio.get_event_loop()
     if uid not in chat_sessions:
@@ -133,38 +146,41 @@ async def generate_response(uid: int, msg: str, attachments: List[discord.Attach
                 {"role": "model", "parts": ["Understood. I am Kanade. How can I assist?"]}
             ])
             chat_sessions[uid] = chat
-            print(f"[MODEL] Created session for user {uid} using gemini-2.5-flash")
+            print(f"[MODEL] Created session for user {uid}")
         except Exception as e:
-            print(f"[FATAL] Model init failed: {e}")
+            print(f"[FATAL] {e}")
             return "Error. Try again."
     else:
         chat = chat_sessions[uid]
 
     try:
-        # Handle image analysis if attachments exist
-        content_parts = [msg]
-        if attachments:
-            for att in attachments:
-                if att.content_type and att.content_type.startswith('image/'):
-                    image_data = await att.read()
-                    image_part = genai.protos.Part(inline_data=genai.protos.Blob(
-                        mime_type=att.content_type, data=image_data
-                    ))
-                    content_parts.append(image_part)
-                    print(f"[IMAGE] Analyzing {att.filename} for user {uid}")
+        # Build content: text + images
+        content = [msg]
+        for att in attachments:
+            if att.content_type and att.content_type.startswith('image/'):
+                image_bytes = await att.read()
+                content.append({
+                    'mime_type': att.content_type,
+                    'data': image_bytes
+                })
+                print(f"[IMAGE] Loaded {att.filename}")
 
-        # Send multi-modal content
-        content = genai.protos.Content(parts=[genai.protos.Part(text=' '.join([str(p) for p in content_parts if not hasattr(p, 'inline_data')]))] + [p for p in content_parts if hasattr(p, 'inline_data')])
-        resp = await loop.run_in_executor(None, lambda: chat.send_message(content))
-        
+        # Send to Gemini
+        response = await loop.run_in_executor(
+            None,
+            lambda: chat.send_message(content)
+        )
+
         if len(chat.history) > MAX_HISTORY * 2:
             chat.history = chat.history[-MAX_HISTORY * 2:]
-        return resp.text.strip()
+
+        return response.text.strip()
+
     except Exception as e:
         print(f"[GEMINI ERROR] {e}")
         return "System issue. Please repeat."
 
-# === RUN BOT ===
+# === RUN ===
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
