@@ -1,1 +1,1 @@
-worker: python shinoa_bot.py
+worker: python kanade_bot.py
