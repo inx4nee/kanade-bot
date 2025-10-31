@@ -4,6 +4,8 @@ import google.generativeai as genai
 import asyncio
 import os
 import time
+import io
+from typing import List
 
 # === CONFIG ===
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
@@ -59,7 +61,7 @@ async def on_message(message):
     user_message_count[uid] = user_message_count.get(uid, 0) + 1
 
     async with message.channel.typing():
-        reply = await generate_response(uid, user_msg)
+        reply = await generate_response(uid, user_msg, message.attachments)
     await message.reply(reply)
     await bot.process_commands(message)
 
@@ -70,10 +72,11 @@ async def help_cmd(interaction: discord.Interaction):
     embed.description = (
         "**Kanade Tachibana (Tenshi)**\n\n"
         "• Mention me to talk\n"
+        "• Attach images for analysis\n"
         "• I remember our conversations\n"
         "• `/reset` (admin only)\n"
         "• Auto-forget after 30 days\n"
-        "• `/stats` • `/topteased`\n\n"
+        "• `/stats` • `/tophelped`\n\n"
         "Need help? **@inxainee**"
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -91,20 +94,20 @@ async def stats(interaction: discord.Interaction):
     embed.set_footer(text="Model: gemini-2.5-flash | Auto-delete: 30 days")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# === /topteased ===
-@bot.tree.command(name="topteased", description="Top 10 most helped (admin only)")
-@discord.app_commands.checks.has_permissions(manage_guild=True)
-async def topteased(interaction: discord.Interaction):
+# === /tophelped (PUBLIC LEADERBOARD) ===
+@bot.tree.command(name="tophelped", description="Top 10 most helped by Kanade")
+async def tophelped(interaction: discord.Interaction):
     if not user_message_count:
-        return await interaction.response.send_message("No data yet.", ephemeral=True)
+        return await interaction.response.send_message("No data yet.", ephemeral=False)
     top = sorted(user_message_count.items(), key=lambda x: x[1], reverse=True)[:10]
     lines = []
     for i, (uid, count) in enumerate(top):
         user = bot.get_user(uid)
         name = user.display_name if user else "Unknown"
         lines.append(f"**{i+1}** {name} — {count:,} msgs")
-    embed = discord.Embed(title="Top 10 Most Helped", description="\n".join(lines), color=0xff69b4)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    embed = discord.Embed(title="Top 10 Most Helped by Kanade", description="\n".join(lines), color=0xff69b4)
+    embed.set_footer(text="Keep talking... I'll help more.")
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 # === /reset ===
 @bot.tree.command(name="reset", description="ADMIN: Reset user memory")
@@ -119,8 +122,8 @@ async def reset(interaction: discord.Interaction, member: discord.Member = None)
     else:
         await interaction.response.send_message("No memory found.", ephemeral=True)
 
-# === GENERATE RESPONSE (gemini-2.5-flash) ===
-async def generate_response(uid: int, msg: str) -> str:
+# === GENERATE RESPONSE (WITH IMAGE ANALYSIS) ===
+async def generate_response(uid: int, msg: str, attachments: List[discord.Attachment]) -> str:
     loop = asyncio.get_event_loop()
     if uid not in chat_sessions:
         try:
@@ -138,7 +141,22 @@ async def generate_response(uid: int, msg: str) -> str:
         chat = chat_sessions[uid]
 
     try:
-        resp = await loop.run_in_executor(None, lambda: chat.send_message(msg))
+        # Handle image analysis if attachments exist
+        content_parts = [msg]
+        if attachments:
+            for att in attachments:
+                if att.content_type and att.content_type.startswith('image/'):
+                    image_data = await att.read()
+                    image_part = genai.protos.Part(inline_data=genai.protos.Blob(
+                        mime_type=att.content_type, data=image_data
+                    ))
+                    content_parts.append(image_part)
+                    print(f"[IMAGE] Analyzing {att.filename} for user {uid}")
+
+        # Send multi-modal content
+        content = genai.protos.Content(parts=[genai.protos.Part(text=' '.join([str(p) for p in content_parts if not hasattr(p, 'inline_data')]))] + [p for p in content_parts if hasattr(p, 'inline_data')])
+        resp = await loop.run_in_executor(None, lambda: chat.send_message(content))
+        
         if len(chat.history) > MAX_HISTORY * 2:
             chat.history = chat.history[-MAX_HISTORY * 2:]
         return resp.text.strip()
